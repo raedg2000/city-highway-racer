@@ -1,0 +1,144 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #10220d;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: max(0px, env(safe-area-inset-top)) max(0px, env(safe-area-inset-right)) max(0px, env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left));
+  background: radial-gradient(circle at center, #285d1b 0%, #10220d 70%);
+  touch-action: none;
+}
+
+.game-shell {
+  position: relative;
+  width: min(100vw, calc(100dvh * 16 / 9), 1280px);
+  height: min(calc(100vw * 9 / 16), 100dvh, 720px);
+  aspect-ratio: 16 / 9;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  border-radius: clamp(0px, 2vmin, 18px);
+  overflow: hidden;
+  background: #1d3317;
+}
+
+@supports not (height: 100dvh) {
+  .game-shell {
+    width: min(100vw, calc(100vh * 16 / 9), 1280px);
+    height: min(calc(100vw * 9 / 16), 100vh, 720px);
+  }
+}
+
+canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: auto;
+  background: #2f6d1d;
+  touch-action: none;
+  user-select: none;
+}
+
+.touch-controls {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: none;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: clamp(10px, 3vmin, 28px);
+  padding-bottom: max(clamp(10px, 3vmin, 28px), env(safe-area-inset-bottom));
+  pointer-events: none;
+}
+
+.touch-control-group {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 2.2vmin, 22px);
+  pointer-events: none;
+}
+
+.touch-control-group--speed {
+  align-items: flex-end;
+}
+
+.touch-button {
+  pointer-events: auto;
+  width: clamp(58px, 8.5vmin, 90px);
+  height: clamp(58px, 8.5vmin, 90px);
+  border: 3px solid rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.68);
+  color: #ffffff;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.38), inset 0 0 18px rgba(255, 255, 255, 0.14);
+  font: 900 clamp(22px, 4vmin, 38px) Inter, ui-sans-serif, system-ui, sans-serif;
+  line-height: 1;
+  user-select: none;
+  touch-action: none;
+}
+
+.touch-button--brake,
+.touch-button--accelerate {
+  width: clamp(72px, 11vmin, 112px);
+  height: clamp(58px, 8.5vmin, 90px);
+  border-radius: clamp(18px, 3vmin, 28px);
+  font-size: clamp(13px, 2.3vmin, 20px);
+  letter-spacing: 0.04em;
+}
+
+.touch-button--accelerate {
+  background: rgba(22, 163, 74, 0.74);
+}
+
+.touch-button--brake {
+  background: rgba(185, 28, 28, 0.72);
+}
+
+.touch-button:active {
+  transform: scale(0.94);
+  filter: brightness(1.2);
+}
+
+@media (hover: none), (pointer: coarse), (max-width: 900px) {
+  :root[data-game-scene="play"] .touch-controls {
+    display: flex;
+  }
+}
+
+@media (max-width: 700px) and (orientation: portrait) {
+  .game-shell::before {
+    content: "Landscape mode recommended";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    z-index: 6;
+    transform: translateX(-50%);
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.7);
+    color: rgba(255, 255, 255, 0.86);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    pointer-events: none;
+  }
+}

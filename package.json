@@ -1,0 +1,12 @@
+{
+  "name": "city-highway-racer",
+  "version": "1.0.0",
+  "description": "A cartoon bird-view highway driving game built with TypeScript and HTML5 Canvas.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node server.mjs",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {}
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>City Highway Racer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="game-shell" aria-label="City Highway Racer">
+      <canvas id="gameCanvas" width="1280" height="720">
+        Your browser does not support HTML5 Canvas.
+      </canvas>
+
+      <section id="touchControls" class="touch-controls" aria-label="Touch driving controls">
+        <div class="touch-control-group touch-control-group--steering" aria-label="Steering controls">
+          <button class="touch-button" type="button" data-game-key="ArrowLeft" aria-label="Steer left">←</button>
+          <button class="touch-button" type="button" data-game-key="ArrowRight" aria-label="Steer right">→</button>
+        </div>
+
+        <div class="touch-control-group touch-control-group--speed" aria-label="Speed controls">
+          <button class="touch-button touch-button--brake" type="button" data-game-key="ArrowDown" aria-label="Brake">BRAKE</button>
+          <button class="touch-button touch-button--accelerate" type="button" data-game-key="ArrowUp" aria-label="Accelerate">GO</button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="./dist/main.js"></script>
+  </body>
+</html>
