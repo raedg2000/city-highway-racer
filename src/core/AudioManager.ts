@@ -9,12 +9,17 @@ export class AudioManager {
   private musicRequested = false;
   private musicEnabled = true;
   private effectsEnabled = true;
+  private audioPrimed = false;
+  private unlockHandler: (() => void) | null = null;
 
   public constructor() {
     this.musicElement = new Audio(GameConfig.audio.backgroundMusicPath);
     this.musicElement.loop = true;
     this.musicElement.volume = GameConfig.audio.musicVolume;
     this.musicElement.preload = 'auto';
+    this.musicElement.setAttribute('playsinline', '');
+    this.musicElement.setAttribute('webkit-playsinline', '');
+    this.primeAudioOnUserGesture();
   }
 
   public isMusicEnabled(): boolean {
@@ -57,7 +62,11 @@ export class AudioManager {
 
     try {
       await this.musicElement.play();
+      this.isFallbackMusicEnabled = false;
     } catch {
+      // Playback was rejected (e.g. iOS Safari outside a user gesture).
+      // Allow a later retry once audio has been primed by a user gesture.
+      this.musicStarted = false;
       this.isFallbackMusicEnabled = true;
     }
   }
@@ -125,13 +134,80 @@ export class AudioManager {
   }
 
   private ensureContext(): void {
-    if (this.audioContext) {
-      if (this.audioContext.state === 'suspended') void this.audioContext.resume();
-      return;
+    if (!this.audioContext) {
+      const AudioContextConstructor = window.AudioContext ?? window.webkitAudioContext;
+      this.audioContext = new AudioContextConstructor();
     }
 
-    const AudioContextConstructor = window.AudioContext ?? window.webkitAudioContext;
-    this.audioContext = new AudioContextConstructor();
+    // iOS Safari creates AudioContexts in the 'suspended' state. resume() must
+    // be invoked inside a user gesture; callers ensure that.
+    if (this.audioContext.state === 'suspended') {
+      void this.audioContext.resume();
+    }
+  }
+
+  private primeAudioOnUserGesture(): void {
+    const handler = (): void => {
+      if (this.audioPrimed) return;
+      this.audioPrimed = true;
+
+      this.ensureContext();
+
+      // Warm up WebAudio output by playing a 1-sample silent buffer inside
+      // the user gesture. Without this, the first oscillator-based sound
+      // effects can stay silent on iPadOS Safari.
+      if (this.audioContext) {
+        try {
+          const silentBuffer = this.audioContext.createBuffer(1, 1, 22050);
+          const source = this.audioContext.createBufferSource();
+          source.buffer = silentBuffer;
+          source.connect(this.audioContext.destination);
+          source.start(0);
+        } catch {
+          // ignore — non-fatal
+        }
+      }
+
+      // iOS Safari only allows audio.play() inside a user gesture. Start the
+      // real (unmuted) background track NOW so playback is authorized, even
+      // if scene logic has not yet called startBackgroundMusic().
+      this.musicRequested = true;
+      this.musicStarted = true;
+      this.musicElement.muted = false;
+      this.musicElement.volume = GameConfig.audio.musicVolume;
+
+      const playResult = this.musicElement.play();
+      if (playResult && typeof playResult.then === 'function') {
+        playResult
+          .then(() => {
+            this.isFallbackMusicEnabled = false;
+            // If music was toggled off before the gesture, honor that now.
+            if (!this.musicEnabled) this.pauseBackgroundMusic();
+          })
+          .catch(() => {
+            this.musicStarted = false;
+            this.isFallbackMusicEnabled = true;
+          });
+      }
+
+      this.removeUnlockListeners();
+    };
+
+    this.unlockHandler = handler;
+    document.addEventListener('pointerdown', handler, { capture: true, passive: true });
+    document.addEventListener('touchstart', handler, { capture: true, passive: true });
+    document.addEventListener('keydown', handler, { capture: true });
+    document.addEventListener('mousedown', handler, { capture: true });
+  }
+
+  private removeUnlockListeners(): void {
+    if (!this.unlockHandler) return;
+    const handler = this.unlockHandler;
+    document.removeEventListener('pointerdown', handler, { capture: true } as EventListenerOptions);
+    document.removeEventListener('touchstart', handler, { capture: true } as EventListenerOptions);
+    document.removeEventListener('keydown', handler, { capture: true } as EventListenerOptions);
+    document.removeEventListener('mousedown', handler, { capture: true } as EventListenerOptions);
+    this.unlockHandler = null;
   }
 
   private playTone(frequency: number, durationSeconds: number, type: OscillatorType, volume: number): void {

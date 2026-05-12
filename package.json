@@ -4,9 +4,12 @@
   "description": "A cartoon bird-view highway driving game built with TypeScript and HTML5 Canvas.",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run check && npm run bundle",
+    "bundle": "esbuild src/main.ts --bundle --format=esm --target=es2022 --outfile=dist/main.js --sourcemap",
     "start": "node server.mjs",
     "check": "tsc -p tsconfig.json --noEmit"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "esbuild": "^0.23.1"
+  }
 }
