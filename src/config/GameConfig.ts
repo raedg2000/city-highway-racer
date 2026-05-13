@@ -16,11 +16,11 @@ export const GameConfig = {
     width: 54,
     height: 82,
     screenY: 570,
-    accelerationKmhPerSecond: 56,
-    brakeKmhPerSecond: 84,
+    accelerationKmhPerSecond: 112,
+    brakeKmhPerSecond: 168,
     dragKmhPerSecond: 2.5,
     steeringPixelsPerSecond: 450,
-    maximumSpeedKmh: 160
+    maximumSpeedKmh: 300
   },
   traffic: {
     laneChangePixelsPerSecond: 116,
@@ -39,6 +39,8 @@ export const GameConfig = {
     scenerySpacingMeters: 25
   },
   rules: {
+    minimumSpeedLimitKmh: 80,
+    maximumSpeedLimitKmh: 300,
     speedPenaltyDelaySeconds: 5,
     speedPenaltyPointsPerSecond: 1,
     speedLimitWarmupDistanceMeters: 135,
@@ -49,6 +51,10 @@ export const GameConfig = {
     backgroundMusicPath: './assets/music/background.mp3',
     musicVolume: 0.34,
     effectsVolume: 0.55
+  },
+  assets: {
+    images: ['./assets/images/concept-highway.png'],
+    audio: ['./assets/music/background.mp3']
   }
 } as const;
 

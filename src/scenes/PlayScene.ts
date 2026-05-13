@@ -6,7 +6,7 @@ import type { Cargo } from '../entities/Cargo.js';
 import type { Obstacle } from '../entities/Obstacle.js';
 import { PlayerCar } from '../entities/PlayerCar.js';
 import type { TrafficVehicle } from '../entities/TrafficVehicle.js';
-import { drawOutlinedText, fillRoundedRectangle, strokeRoundedRectangle } from '../rendering/CanvasDrawing.js';
+import { drawButton, drawOutlinedText, fillRoundedRectangle, strokeRoundedRectangle } from '../rendering/CanvasDrawing.js';
 import { EntityRenderer } from '../rendering/EntityRenderer.js';
 import { RoadRenderer } from '../rendering/RoadRenderer.js';
 import { VehicleRenderer } from '../rendering/VehicleRenderer.js';
@@ -15,7 +15,8 @@ import { SpawnSystem } from '../systems/SpawnSystem.js';
 import { SpeedLimitSystem, type SpeedLimitStatus } from '../systems/SpeedLimitSystem.js';
 import { TrafficSystem } from '../systems/TrafficSystem.js';
 import type { FailureSummary, GameSessionOptions, ResultSummary } from '../types/GameFlow.js';
-import { drawScreenControls, handleScreenControlInput } from '../ui/ScreenControls.js';
+import type { Rectangle } from '../types/Geometry.js';
+import { drawScreenControls, handleScreenControlInput, type ScreenControlLayout } from '../ui/ScreenControls.js';
 import { clamp, formatTime } from '../utils/MathUtils.js';
 import { RandomNumberGenerator } from '../utils/Random.js';
 import { FailScene } from './FailScene.js';
@@ -67,6 +68,7 @@ export class PlayScene implements Scene {
   private speedLimitStatus: SpeedLimitStatus;
   private lastCargoPopupText = '';
   private cargoPopupSeconds = 0;
+  private isPaused = false;
 
   public constructor(options: GameSessionOptions) {
     this.level = createLevelDefinition(options.levelNumber);
@@ -83,7 +85,8 @@ export class PlayScene implements Scene {
   }
 
   public update(deltaSeconds: number, engine: GameEngine): void {
-    if (this.handleExitOrSettings(engine)) return;
+    if (this.handlePlayCommands(engine)) return;
+    if (this.isPaused) return;
 
     this.elapsedSeconds += deltaSeconds;
     this.cargoPopupSeconds = Math.max(0, this.cargoPopupSeconds - deltaSeconds);
@@ -134,18 +137,57 @@ export class PlayScene implements Scene {
     this.vehicleRenderer.drawPlayer(context, this.player, this.player.speedKmh, this.passingPulseSeconds);
     this.drawDrivingEffects(context);
     this.drawHeadsUpDisplay(context, engine);
+    if (this.isPaused) this.drawPauseOverlay(context);
   }
 
 
-  private handleExitOrSettings(engine: GameEngine): boolean {
-    const controlAction = handleScreenControlInput(engine, this.getPlayScreenControlsLayout());
-    if (controlAction === 'endGame' || engine.input.consumePressed('Escape')) {
-      engine.audio.stopBackgroundMusic();
-      engine.setScene(new StartScene({ levelNumber: this.level.levelNumber, score: this.previousScore }));
+  private handlePlayCommands(engine: GameEngine): boolean {
+    const controlAction = handleScreenControlInput(engine, this.getPlayScreenControlsLayout(engine.isCompactViewport()));
+
+    if (this.isPaused) {
+      if (controlAction === 'endGame' || engine.input.consumePressed('Escape')) {
+        this.exitToStart(engine);
+        return true;
+      }
+
+      if (controlAction === 'pause' || engine.input.consumePressed('p', 'P', 'Enter', ' ')) {
+        this.isPaused = false;
+        return true;
+      }
+
+      const click = engine.input.consumePointerClickPoint();
+      if (!click) return controlAction !== 'none';
+
+      const point = engine.clientPointToCanvasPoint(click.clientX, click.clientY);
+      if (this.pointInsideRectangle(point, this.resumeButtonRectangle())) {
+        this.isPaused = false;
+        return true;
+      }
+
+      if (this.pointInsideRectangle(point, this.exitButtonRectangle())) {
+        this.exitToStart(engine);
+        return true;
+      }
+
+      return true;
+    }
+
+    if (controlAction === 'pause' || engine.input.consumePressed('p', 'P', 'Escape')) {
+      this.isPaused = true;
+      return true;
+    }
+
+    if (controlAction === 'endGame') {
+      this.exitToStart(engine);
       return true;
     }
 
     return controlAction !== 'none';
+  }
+
+  private exitToStart(engine: GameEngine): void {
+      engine.audio.stopBackgroundMusic();
+      engine.setScene(new StartScene({ levelNumber: this.level.levelNumber, score: this.previousScore }));
   }
 
   private applySpeedLimitPenalty(deltaSeconds: number): void {
@@ -296,6 +338,11 @@ export class PlayScene implements Scene {
   }
 
   private drawHeadsUpDisplay(context: CanvasRenderingContext2D, engine: GameEngine): void {
+    if (engine.isCompactViewport()) {
+      this.drawCompactHeadsUpDisplay(context, engine);
+      return;
+    }
+
     const score = this.currentScore();
     const progress = Math.min(1, this.player.distanceMeters / this.level.distanceMeters);
     const screenControlsLayout = this.getPlayScreenControlsLayout();
@@ -321,7 +368,7 @@ export class PlayScene implements Scene {
     this.drawSpeedPanel(context);
     this.drawSpeedLimitRoadSign(context);
     drawScreenControls(context, engine, screenControlsLayout);
-    this.drawSpeedViolationWarning(context);
+    this.drawSpeedViolationWarning(context, false);
     
 
     if (this.cargoPopupSeconds > 0) {
@@ -333,13 +380,51 @@ export class PlayScene implements Scene {
     context.restore();
   }
 
-  private getPlayScreenControlsLayout(): { x: number; y: number; includeEndGameButton: true } {
+  private drawCompactHeadsUpDisplay(context: CanvasRenderingContext2D, engine: GameEngine): void {
+    const score = this.currentScore();
+    const progress = Math.min(1, this.player.distanceMeters / this.level.distanceMeters);
+
+    context.save();
+    fillRoundedRectangle(context, 14, 14, 292, 112, 14, 'rgba(15, 23, 42, 0.78)');
+    strokeRoundedRectangle(context, 14, 14, 292, 112, 14, 'rgba(255, 255, 255, 0.18)', 2);
+    context.textAlign = 'left';
+    context.textBaseline = 'middle';
+    context.font = '900 18px Inter, system-ui, sans-serif';
+    context.fillStyle = '#fef08a';
+    context.fillText(`Level ${this.level.levelNumber}`, 30, 36);
+    context.font = '700 15px Inter, system-ui, sans-serif';
+    context.fillStyle = '#ffffff';
+    context.fillText(`Score ${score}`, 30, 62);
+    context.fillText(`Time ${formatTime(this.elapsedSeconds)}`, 30, 86);
+    context.fillStyle = '#bbf7d0';
+    context.fillText(`Passes ${this.passedVehicleCount}`, 168, 86);
+    fillRoundedRectangle(context, 30, 106, 244, 10, 5, 'rgba(255,255,255,0.16)');
+    fillRoundedRectangle(context, 30, 106, 244 * progress, 10, 5, '#22c55e');
+
+    this.drawCompactSpeedPanel(context);
+    drawScreenControls(context, engine, this.getPlayScreenControlsLayout(true));
+    this.drawSpeedViolationWarning(context, true);
+
+    if (this.cargoPopupSeconds > 0) {
+      context.font = '900 24px Inter, system-ui, sans-serif';
+      context.textAlign = 'center';
+      drawOutlinedText(context, this.lastCargoPopupText, this.player.x, this.player.getScreenY() - 76, '#fde68a', 'rgba(0,0,0,0.7)', 6);
+    }
+
+    context.restore();
+  }
+
+  private getPlayScreenControlsLayout(forceCompact = false): ScreenControlLayout {
+    if (forceCompact) {
+      return { x: 1172, y: 112, includePauseButton: true, includeEndGameButton: false, includeAudioButtons: false, density: 'compact' };
+    }
+
     const topHudRightEdge = 18 + 376;
     const speedPanelLeftEdge = 990;
-    const buttonRowWidth = 136 + 10 + 136 + 10 + 108;
+    const buttonRowWidth = 136 + 10 + 136 + 10 + 108 + 10 + 108;
     const availableWidth = speedPanelLeftEdge - topHudRightEdge;
     const x = topHudRightEdge + Math.round((availableWidth - buttonRowWidth) / 2);
-    return { x, y: 18, includeEndGameButton: true };
+    return { x, y: 18, includePauseButton: true, includeEndGameButton: true, includeAudioButtons: true };
   }
 
   private drawSpeedPanel(context: CanvasRenderingContext2D): void {
@@ -367,33 +452,88 @@ export class PlayScene implements Scene {
     }
   }
 
-  private drawSpeedViolationWarning(context: CanvasRenderingContext2D): void {
+  private drawCompactSpeedPanel(context: CanvasRenderingContext2D): void {
+    const isViolation = this.speedLimitStatus.isViolation;
+    const x = 1014;
+    const y = 14;
+    fillRoundedRectangle(context, x, y, 250, 92, 14, 'rgba(15, 23, 42, 0.78)');
+    strokeRoundedRectangle(context, x, y, 250, 92, 14, isViolation ? '#f87171' : 'rgba(255, 255, 255, 0.18)', 2);
+
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.font = '900 38px Inter, system-ui, sans-serif';
+    drawOutlinedText(context, `${Math.round(this.player.speedKmh)}`, x + 88, y + 40, isViolation ? '#fca5a5' : '#93c5fd', 'rgba(0,0,0,0.65)', 5);
+    context.font = '800 14px Inter, system-ui, sans-serif';
+    context.fillStyle = '#ffffff';
+    context.fillText('km/h', x + 160, y + 40);
+    context.font = '800 16px Inter, system-ui, sans-serif';
+    context.fillText(`${this.speedLimitStatus.minimumSpeedKmh}-${this.speedLimitStatus.maximumSpeedKmh}`, x + 124, y + 70);
+  }
+
+  private drawSpeedViolationWarning(context: CanvasRenderingContext2D, isCompact: boolean): void {
     if (!this.speedLimitStatus.isViolation) return;
 
     const isPenaltyActive = this.speedLimitStatus.penaltyIsActive;
     const blink = Math.sin(this.elapsedSeconds * 10) > 0;
-    const width = 490;
-    const height = 72;
+    const width = isCompact ? 424 : 490;
+    const height = isCompact ? 58 : 72;
     const topHudRightEdge = 18 + 376;
     const speedPanelLeftEdge = 990;
     const availableWidth = speedPanelLeftEdge - topHudRightEdge;
-    const x = topHudRightEdge + Math.round((availableWidth - width) / 2);
-    const y = 62;
+    const x = isCompact ? Math.round((GameConfig.canvas.width - width) / 2) : topHudRightEdge + Math.round((availableWidth - width) / 2);
+    const y = isCompact ? 134 : 62;
 
     context.save();
     fillRoundedRectangle(context, x, y, width, height, 18, isPenaltyActive ? 'rgba(127, 29, 29, 0.94)' : 'rgba(120, 53, 15, 0.94)');
     strokeRoundedRectangle(context, x, y, width, height, 18, blink ? '#fef08a' : '#fecaca', 4);
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.font = '900 23px Inter, system-ui, sans-serif';
-    drawOutlinedText(context, '⚠ SPEED LIMIT WARNING', x + width / 2, y + 24, '#ffffff', 'rgba(0,0,0,0.65)', 5);
-    context.font = '800 17px Inter, system-ui, sans-serif';
+    context.font = isCompact ? '900 18px Inter, system-ui, sans-serif' : '900 23px Inter, system-ui, sans-serif';
+    drawOutlinedText(context, 'SPEED LIMIT WARNING', x + width / 2, y + (isCompact ? 20 : 24), '#ffffff', 'rgba(0,0,0,0.65)', 5);
+    context.font = isCompact ? '800 14px Inter, system-ui, sans-serif' : '800 17px Inter, system-ui, sans-serif';
     const detail = isPenaltyActive
       ? `Penalty active: losing ${GameConfig.rules.speedPenaltyPointsPerSecond} point every second`
       : `Adjust speed within ${this.speedLimitStatus.secondsUntilPenalty.toFixed(1)} seconds to avoid penalty`;
     context.fillStyle = isPenaltyActive ? '#fecaca' : '#fef3c7';
-    context.fillText(detail, x + width / 2, y + 51);
+    context.fillText(detail, x + width / 2, y + (isCompact ? 42 : 51));
     context.restore();
+  }
+
+  private drawPauseOverlay(context: CanvasRenderingContext2D): void {
+    context.save();
+    context.fillStyle = 'rgba(2, 6, 23, 0.58)';
+    context.fillRect(0, 0, GameConfig.canvas.width, GameConfig.canvas.height);
+
+    fillRoundedRectangle(context, 390, 214, 500, 288, 18, 'rgba(15, 23, 42, 0.94)');
+    strokeRoundedRectangle(context, 390, 214, 500, 288, 18, 'rgba(255, 255, 255, 0.28)', 2);
+
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.font = '900 42px Inter, system-ui, sans-serif';
+    drawOutlinedText(context, 'PAUSED', 640, 274, '#bfdbfe', 'rgba(0,0,0,0.65)', 5);
+    context.font = '700 18px Inter, system-ui, sans-serif';
+    context.fillStyle = '#e5e7eb';
+    context.fillText('Resume the drive or exit to the start screen.', 640, 320);
+
+    drawButton(context, 'RESUME', 448, 368, 180, 58);
+    drawButton(context, 'EXIT', 652, 368, 180, 58);
+
+    context.font = '700 15px Inter, system-ui, sans-serif';
+    context.fillStyle = 'rgba(255,255,255,0.72)';
+    context.fillText('P / Enter resumes. Esc exits from pause.', 640, 464);
+    context.restore();
+  }
+
+  private resumeButtonRectangle(): Rectangle {
+    return { x: 448, y: 368, width: 180, height: 58 };
+  }
+
+  private exitButtonRectangle(): Rectangle {
+    return { x: 652, y: 368, width: 180, height: 58 };
+  }
+
+  private pointInsideRectangle(point: { readonly x: number; readonly y: number }, rectangle: Rectangle): boolean {
+    return point.x >= rectangle.x && point.x <= rectangle.x + rectangle.width && point.y >= rectangle.y && point.y <= rectangle.y + rectangle.height;
   }
 
   private drawSpeedLimitRoadSign(context: CanvasRenderingContext2D): void {

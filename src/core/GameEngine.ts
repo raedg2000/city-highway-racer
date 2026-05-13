@@ -1,4 +1,5 @@
 import { GameConfig } from '../config/GameConfig.js';
+import { AssetManager } from './AssetManager.js';
 import { AudioManager } from './AudioManager.js';
 import { InputController } from './InputController.js';
 import type { Scene } from './Scene.js';
@@ -7,6 +8,7 @@ import type { Vector2 } from '../types/Geometry.js';
 export class GameEngine {
   public readonly input = new InputController();
   public readonly audio = new AudioManager();
+  public readonly assets = new AssetManager();
   public readonly canvas: HTMLCanvasElement;
   public readonly context: CanvasRenderingContext2D;
 
@@ -21,6 +23,7 @@ export class GameEngine {
     this.context = context;
     this.canvas.width = GameConfig.canvas.width;
     this.canvas.height = GameConfig.canvas.height;
+    void this.assets.preloadAll().catch(() => undefined);
   }
 
   public setScene(scene: Scene): void {
@@ -42,6 +45,18 @@ export class GameEngine {
 
   public clientPointToCanvasPoint(clientX: number, clientY: number): Vector2 {
     const bounds = this.canvas.getBoundingClientRect();
+    if (this.isForcedLandscapeLayout()) {
+      const localX = clientY - bounds.top;
+      const localY = bounds.right - clientX;
+      const scaleX = this.canvas.width / bounds.height;
+      const scaleY = this.canvas.height / bounds.width;
+
+      return {
+        x: localX * scaleX,
+        y: localY * scaleY
+      };
+    }
+
     const scaleX = this.canvas.width / bounds.width;
     const scaleY = this.canvas.height / bounds.height;
 
@@ -49,6 +64,26 @@ export class GameEngine {
       x: (clientX - bounds.left) * scaleX,
       y: (clientY - bounds.top) * scaleY
     };
+  }
+
+  public isCompactViewport(): boolean {
+    const bounds = this.canvas.getBoundingClientRect();
+    return bounds.width < 820 || bounds.height < 500;
+  }
+
+  public isForcedLandscapeLayout(): boolean {
+    return window.matchMedia('(max-width: 820px) and (orientation: portrait)').matches;
+  }
+
+  public requestLandscapeMode(): void {
+    if (!this.isForcedLandscapeLayout()) return;
+
+    const root = document.documentElement;
+    const fullscreenPromise = document.fullscreenElement ? Promise.resolve() : root.requestFullscreen?.() ?? Promise.resolve();
+    void fullscreenPromise
+      .catch(() => undefined)
+      .then(() => screen.orientation?.lock?.('landscape'))
+      .catch(() => undefined);
   }
 
   private readonly onAnimationFrame = (timestamp: number): void => {

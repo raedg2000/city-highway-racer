@@ -71,6 +71,28 @@ export class AudioManager {
     }
   }
 
+  public async startFromUserGesture(): Promise<boolean> {
+    this.musicRequested = true;
+    if (!this.musicEnabled) return true;
+
+    this.musicElement.muted = false;
+    this.musicElement.volume = GameConfig.audio.musicVolume;
+
+    const context = this.ensureContext();
+    try {
+      if (context?.state === 'suspended') await context.resume();
+      await this.musicElement.play();
+      this.musicStarted = true;
+      this.isFallbackMusicEnabled = false;
+      return true;
+    } catch {
+      this.audioPrimed = false;
+      this.musicStarted = false;
+      this.isFallbackMusicEnabled = true;
+      return false;
+    }
+  }
+
   public stopBackgroundMusic(): void {
     this.musicRequested = false;
     this.pauseBackgroundMusic();
@@ -92,16 +114,26 @@ export class AudioManager {
 
   public playCargoCollected(): void {
     if (!this.effectsEnabled) return;
-    this.ensureContext();
-    this.playTone(640, 0.08, 'sine', GameConfig.audio.effectsVolume * 0.32);
-    window.setTimeout(() => {
-      if (this.effectsEnabled) this.playTone(920, 0.11, 'sine', GameConfig.audio.effectsVolume * 0.28);
-    }, 70);
+    void this.withReadyContext(() => {
+      this.playTone(640, 0.08, 'sine', GameConfig.audio.effectsVolume * 0.32);
+      window.setTimeout(() => {
+        if (this.effectsEnabled) this.playTone(920, 0.11, 'sine', GameConfig.audio.effectsVolume * 0.28);
+      }, 70);
+    });
   }
 
   public playCrash(): void {
     if (!this.effectsEnabled) return;
-    this.ensureContext();
+    void this.withReadyContext(() => this.playCrashNow());
+  }
+
+  public prepareForPlayback(): void {
+    void this.withReadyContext(() => {
+      this.playTone(1, 0.01, 'sine', 0.0001);
+    });
+  }
+
+  private playCrashNow(): void {
     if (!this.audioContext) return;
 
     const noiseLength = Math.floor(this.audioContext.sampleRate * 0.45);
@@ -126,6 +158,21 @@ export class AudioManager {
     this.playTone(82, 0.35, 'sawtooth', GameConfig.audio.effectsVolume * 0.34);
   }
 
+  private async withReadyContext(callback: () => void): Promise<void> {
+    const context = this.ensureContext();
+    if (!context) return;
+
+    if (context.state === 'suspended') {
+      try {
+        await context.resume();
+      } catch {
+        return;
+      }
+    }
+
+    if (context.state !== 'closed') callback();
+  }
+
   private pauseBackgroundMusic(): void {
     this.musicElement.pause();
     this.musicElement.currentTime = 0;
@@ -133,7 +180,7 @@ export class AudioManager {
     this.musicStarted = false;
   }
 
-  private ensureContext(): void {
+  private ensureContext(): AudioContext | null {
     if (!this.audioContext) {
       const AudioContextConstructor = window.AudioContext ?? window.webkitAudioContext;
       this.audioContext = new AudioContextConstructor();
@@ -144,6 +191,8 @@ export class AudioManager {
     if (this.audioContext.state === 'suspended') {
       void this.audioContext.resume();
     }
+
+    return this.audioContext;
   }
 
   private primeAudioOnUserGesture(): void {
@@ -168,29 +217,11 @@ export class AudioManager {
         }
       }
 
-      // iOS Safari only allows audio.play() inside a user gesture. Start the
-      // real (unmuted) background track NOW so playback is authorized, even
-      // if scene logic has not yet called startBackgroundMusic().
-      this.musicRequested = true;
-      this.musicStarted = true;
-      this.musicElement.muted = false;
-      this.musicElement.volume = GameConfig.audio.musicVolume;
-
-      const playResult = this.musicElement.play();
-      if (playResult && typeof playResult.then === 'function') {
-        playResult
-          .then(() => {
-            this.isFallbackMusicEnabled = false;
-            // If music was toggled off before the gesture, honor that now.
-            if (!this.musicEnabled) this.pauseBackgroundMusic();
-          })
-          .catch(() => {
-            this.musicStarted = false;
-            this.isFallbackMusicEnabled = true;
-          });
-      }
-
-      this.removeUnlockListeners();
+      void this.startFromUserGesture().then((didStart) => {
+        if (!didStart) return;
+        if (!this.musicEnabled) this.pauseBackgroundMusic();
+        this.removeUnlockListeners();
+      });
     };
 
     this.unlockHandler = handler;

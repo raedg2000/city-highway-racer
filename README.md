@@ -5,7 +5,7 @@ A cartoonish bird-view highway driving game built with **TypeScript** and **HTML
 ## Features
 
 - Startup screen, fail screen, and result screen.
-- In-game end/escape control for abandoning a started drive and returning to the startup screen.
+- In-game pause overlay with resume and exit controls for abandoning a started drive safely.
 - Separate Music and Sound toggle buttons, available from the startup screen and in-game screens.
 - Arrow-key / WASD driving controls, plus touch controls for phones and tablets.
 - Accelerate, decelerate, and steer freely across lanes.
@@ -20,10 +20,13 @@ A cartoonish bird-view highway driving game built with **TypeScript** and **HTML
 - Crash sound on player collisions and nearby traffic accidents.
 - Background music support through a Pixabay MP3 file, plus a softer synthesized fallback loop.
 - Sound effects can be muted independently from background music.
-- Randomly changing minimum and maximum speed limits.
+- Fixed 80-300 km/h speed range with penalties only when driving outside that range.
 - Speed-limit violations no longer fail the level immediately: after 5 continuous seconds over/under the allowed range, the player loses 1 point every second until the speed is corrected.
 - Large top-screen speed warning banner when the player is outside the speed range.
 - Score, speed, time, safe passes, route, and level progress HUD.
+- Compact phone/tablet HUD and side-stacked touch controls keep the road visible on narrow screens.
+- Mobile phones request landscape orientation on start, with a rotated landscape fallback for portrait browsers that cannot lock orientation.
+- Start screen waits for configured music, audio, and graphics assets to download before starting gameplay.
 - Faster city-to-city completion grants a larger result-screen bonus.
 - Trees, buildings, signs, and roadside scenery following the supplied cartoon theme.
 - Responsive page layout that scales the 16:9 game canvas to desktop, tablet, and mobile screens.
@@ -60,7 +63,8 @@ Keyboard / desktop:
 - `Left Arrow` or `A`: Steer left
 - `Right Arrow` or `D`: Steer right
 - `Enter`, `Space`, or click: Start / continue / retry
-- `Escape`: End the current drive during gameplay, or return from fail/result screen to startup screen
+- `P`: Pause or resume during gameplay
+- `Escape`: Pause during gameplay, exit from the pause overlay, or return from fail/result screen to startup screen
 - `M`: Toggle background music on/off
 - `N`: Toggle sound effects on/off
 
@@ -69,9 +73,9 @@ Touch screens:
 - `GO`: Accelerate
 - `BRAKE`: Decelerate
 - `←` and `→`: Steer left/right
-- On-screen `Music`, `Sound`, and in-game `END` buttons can be tapped directly.
+- On-screen `Music`, `Sound`, and pause buttons can be tapped directly.
 
-The touch buttons appear automatically during gameplay on phones, tablets, and other coarse-pointer devices. Landscape mode is recommended for small phones.
+The touch buttons appear automatically during gameplay on phones, tablets, and other coarse-pointer devices. On narrow screens they stack near the bottom of the side strips to keep the road clear, with `BRAKE` and `GO` using the same touch target size. Pause opens the resume/exit menu, so there is no separate in-game exit button on compact mobile screens.
 
 ## Background music from Pixabay
 

@@ -17,11 +17,11 @@ var GameConfig = {
     width: 54,
     height: 82,
     screenY: 570,
-    accelerationKmhPerSecond: 56,
-    brakeKmhPerSecond: 84,
+    accelerationKmhPerSecond: 112,
+    brakeKmhPerSecond: 168,
     dragKmhPerSecond: 2.5,
     steeringPixelsPerSecond: 450,
-    maximumSpeedKmh: 160
+    maximumSpeedKmh: 300
   },
   traffic: {
     laneChangePixelsPerSecond: 116,
@@ -40,6 +40,8 @@ var GameConfig = {
     scenerySpacingMeters: 25
   },
   rules: {
+    minimumSpeedLimitKmh: 80,
+    maximumSpeedLimitKmh: 300,
     speedPenaltyDelaySeconds: 5,
     speedPenaltyPointsPerSecond: 1,
     speedLimitWarmupDistanceMeters: 135,
@@ -50,6 +52,10 @@ var GameConfig = {
     backgroundMusicPath: "./assets/music/background.mp3",
     musicVolume: 0.34,
     effectsVolume: 0.55
+  },
+  assets: {
+    images: ["./assets/images/concept-highway.png"],
+    audio: ["./assets/music/background.mp3"]
   }
 };
 function laneWidth() {
@@ -58,6 +64,69 @@ function laneWidth() {
 function laneCenter(laneIndex) {
   return GameConfig.road.left + laneWidth() * (laneIndex + 0.5);
 }
+
+// src/core/AssetManager.ts
+var AssetManager = class {
+  preloadPromise = null;
+  state = "idle";
+  loadedCount = 0;
+  failedMessage = "";
+  preloadAll() {
+    if (this.preloadPromise) return this.preloadPromise;
+    this.state = "loading";
+    this.loadedCount = 0;
+    this.failedMessage = "";
+    const tasks = [
+      ...GameConfig.assets.images.map((path) => this.preloadImage(path)),
+      ...GameConfig.assets.audio.map((path) => this.preloadAudio(path))
+    ];
+    this.preloadPromise = Promise.all(tasks).then(() => {
+      this.state = "ready";
+    }).catch((error) => {
+      this.state = "failed";
+      this.failedMessage = error instanceof Error ? error.message : "Unable to load game assets.";
+      this.preloadPromise = null;
+      throw error;
+    });
+    return this.preloadPromise;
+  }
+  retry() {
+    if (this.state !== "failed") return this.preloadAll();
+    this.preloadPromise = null;
+    return this.preloadAll();
+  }
+  isReady() {
+    return this.state === "ready";
+  }
+  getState() {
+    return this.state;
+  }
+  getLoadedCount() {
+    return this.loadedCount;
+  }
+  getTotalCount() {
+    return GameConfig.assets.images.length + GameConfig.assets.audio.length;
+  }
+  getFailedMessage() {
+    return this.failedMessage;
+  }
+  async preloadImage(path) {
+    await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error(`Unable to load image asset: ${path}`));
+      image.src = path;
+    });
+    this.loadedCount += 1;
+  }
+  async preloadAudio(path) {
+    const response = await fetch(path, { cache: "force-cache" });
+    if (!response.ok) throw new Error(`Unable to load audio asset: ${path}`);
+    await response.blob();
+    this.loadedCount += 1;
+  }
+};
 
 // src/core/AudioManager.ts
 var AudioManager = class {
@@ -117,6 +186,25 @@ var AudioManager = class {
       this.isFallbackMusicEnabled = true;
     }
   }
+  async startFromUserGesture() {
+    this.musicRequested = true;
+    if (!this.musicEnabled) return true;
+    this.musicElement.muted = false;
+    this.musicElement.volume = GameConfig.audio.musicVolume;
+    const context = this.ensureContext();
+    try {
+      if (context?.state === "suspended") await context.resume();
+      await this.musicElement.play();
+      this.musicStarted = true;
+      this.isFallbackMusicEnabled = false;
+      return true;
+    } catch {
+      this.audioPrimed = false;
+      this.musicStarted = false;
+      this.isFallbackMusicEnabled = true;
+      return false;
+    }
+  }
   stopBackgroundMusic() {
     this.musicRequested = false;
     this.pauseBackgroundMusic();
@@ -135,15 +223,23 @@ var AudioManager = class {
   }
   playCargoCollected() {
     if (!this.effectsEnabled) return;
-    this.ensureContext();
-    this.playTone(640, 0.08, "sine", GameConfig.audio.effectsVolume * 0.32);
-    window.setTimeout(() => {
-      if (this.effectsEnabled) this.playTone(920, 0.11, "sine", GameConfig.audio.effectsVolume * 0.28);
-    }, 70);
+    void this.withReadyContext(() => {
+      this.playTone(640, 0.08, "sine", GameConfig.audio.effectsVolume * 0.32);
+      window.setTimeout(() => {
+        if (this.effectsEnabled) this.playTone(920, 0.11, "sine", GameConfig.audio.effectsVolume * 0.28);
+      }, 70);
+    });
   }
   playCrash() {
     if (!this.effectsEnabled) return;
-    this.ensureContext();
+    void this.withReadyContext(() => this.playCrashNow());
+  }
+  prepareForPlayback() {
+    void this.withReadyContext(() => {
+      this.playTone(1, 0.01, "sine", 1e-4);
+    });
+  }
+  playCrashNow() {
     if (!this.audioContext) return;
     const noiseLength = Math.floor(this.audioContext.sampleRate * 0.45);
     const buffer = this.audioContext.createBuffer(1, noiseLength, this.audioContext.sampleRate);
@@ -164,6 +260,18 @@ var AudioManager = class {
     noise.start();
     this.playTone(82, 0.35, "sawtooth", GameConfig.audio.effectsVolume * 0.34);
   }
+  async withReadyContext(callback) {
+    const context = this.ensureContext();
+    if (!context) return;
+    if (context.state === "suspended") {
+      try {
+        await context.resume();
+      } catch {
+        return;
+      }
+    }
+    if (context.state !== "closed") callback();
+  }
   pauseBackgroundMusic() {
     this.musicElement.pause();
     this.musicElement.currentTime = 0;
@@ -178,6 +286,7 @@ var AudioManager = class {
     if (this.audioContext.state === "suspended") {
       void this.audioContext.resume();
     }
+    return this.audioContext;
   }
   primeAudioOnUserGesture() {
     const handler = () => {
@@ -194,21 +303,11 @@ var AudioManager = class {
         } catch {
         }
       }
-      this.musicRequested = true;
-      this.musicStarted = true;
-      this.musicElement.muted = false;
-      this.musicElement.volume = GameConfig.audio.musicVolume;
-      const playResult = this.musicElement.play();
-      if (playResult && typeof playResult.then === "function") {
-        playResult.then(() => {
-          this.isFallbackMusicEnabled = false;
-          if (!this.musicEnabled) this.pauseBackgroundMusic();
-        }).catch(() => {
-          this.musicStarted = false;
-          this.isFallbackMusicEnabled = true;
-        });
-      }
-      this.removeUnlockListeners();
+      void this.startFromUserGesture().then((didStart) => {
+        if (!didStart) return;
+        if (!this.musicEnabled) this.pauseBackgroundMusic();
+        this.removeUnlockListeners();
+      });
     };
     this.unlockHandler = handler;
     document.addEventListener("pointerdown", handler, { capture: true, passive: true });
@@ -378,6 +477,7 @@ var InputController = class {
 var GameEngine = class {
   input = new InputController();
   audio = new AudioManager();
+  assets = new AssetManager();
   canvas;
   context;
   activeScene = null;
@@ -390,6 +490,7 @@ var GameEngine = class {
     this.context = context;
     this.canvas.width = GameConfig.canvas.width;
     this.canvas.height = GameConfig.canvas.height;
+    void this.assets.preloadAll().catch(() => void 0);
   }
   setScene(scene) {
     this.activeScene?.exit?.();
@@ -407,12 +508,35 @@ var GameEngine = class {
   }
   clientPointToCanvasPoint(clientX, clientY) {
     const bounds = this.canvas.getBoundingClientRect();
+    if (this.isForcedLandscapeLayout()) {
+      const localX = clientY - bounds.top;
+      const localY = bounds.right - clientX;
+      const scaleX2 = this.canvas.width / bounds.height;
+      const scaleY2 = this.canvas.height / bounds.width;
+      return {
+        x: localX * scaleX2,
+        y: localY * scaleY2
+      };
+    }
     const scaleX = this.canvas.width / bounds.width;
     const scaleY = this.canvas.height / bounds.height;
     return {
       x: (clientX - bounds.left) * scaleX,
       y: (clientY - bounds.top) * scaleY
     };
+  }
+  isCompactViewport() {
+    const bounds = this.canvas.getBoundingClientRect();
+    return bounds.width < 820 || bounds.height < 500;
+  }
+  isForcedLandscapeLayout() {
+    return window.matchMedia("(max-width: 820px) and (orientation: portrait)").matches;
+  }
+  requestLandscapeMode() {
+    if (!this.isForcedLandscapeLayout()) return;
+    const root = document.documentElement;
+    const fullscreenPromise = document.fullscreenElement ? Promise.resolve() : root.requestFullscreen?.() ?? Promise.resolve();
+    void fullscreenPromise.catch(() => void 0).then(() => screen.orientation?.lock?.("landscape")).catch(() => void 0);
   }
   onAnimationFrame = (timestamp) => {
     const deltaSeconds = Math.min((timestamp - this.lastFrameTime) / 1e3, 0.05);
@@ -442,9 +566,6 @@ function formatTime(totalSeconds) {
   const tenths = Math.floor(totalSeconds % 1 * 10);
   return `${minutes}:${seconds.toString().padStart(2, "0")}.${tenths}`;
 }
-function roundToNearest(value, step) {
-  return Math.round(value / step) * step;
-}
 
 // src/config/LevelFactory.ts
 var cities = [
@@ -464,8 +585,8 @@ function createLevelDefinition(levelNumber) {
   const fromCity = cities[(index - 1) % cities.length];
   const toCity = cities[index % cities.length];
   const distanceMeters = 2300 + index * 520;
-  const startingMinimumSpeedKmh = clamp(25 + Math.floor((index - 1) / 3) * 5, 25, 65);
-  const startingMaximumSpeedKmh = clamp(115 + Math.floor((index - 1) / 4) * 5, 110, 145);
+  const startingMinimumSpeedKmh = GameConfig.rules.minimumSpeedLimitKmh;
+  const startingMaximumSpeedKmh = GameConfig.rules.maximumSpeedLimitKmh;
   return {
     levelNumber: index,
     fromCity,
@@ -479,7 +600,7 @@ function createLevelDefinition(levelNumber) {
     cargoSpawnIntervalSeconds: clamp(6.4 - index * 0.08, 4.6, 6.4),
     trafficLaneChangeChancePerSecond: clamp(0.025 + index * 0.011, 0.025, 0.18),
     speedRuleChangeDistanceMeters: clamp(1050 - index * 42, 520, 1050),
-    targetCompletionSeconds: distanceMeters / ((88 + index * 2) / 3.6),
+    targetCompletionSeconds: distanceMeters / ((150 + index * 4) / 3.6),
     seed: 2049 + index * 977
   };
 }
@@ -841,6 +962,8 @@ var audioButtonWidth = 136;
 var endButtonWidth = 108;
 var buttonHeight = 36;
 var gap = 10;
+var compactButtonSize = 44;
+var compactPauseButtonSize = 84;
 function handleScreenControlInput(engine2, layout) {
   if (engine2.input.consumePressed("m", "M")) {
     engine2.audio.toggleMusic();
@@ -861,58 +984,116 @@ function handleScreenControlInput(engine2, layout) {
   return target;
 }
 function drawScreenControls(context, engine2, layout) {
-  const musicRect = musicButtonRectangle(layout);
-  const effectsRect = effectsButtonRectangle(layout);
-  drawToggleButton(context, musicRect, "Music", engine2.audio.isMusicEnabled(), "M");
-  drawToggleButton(context, effectsRect, "Sound", engine2.audio.isEffectsEnabled(), "N");
+  if (layout.includeAudioButtons !== false) {
+    const musicRect = musicButtonRectangle(layout);
+    const effectsRect = effectsButtonRectangle(layout);
+    drawToggleButton(context, musicRect, "Music", engine2.audio.isMusicEnabled(), "M", layout.density);
+    drawToggleButton(context, effectsRect, "Sound", engine2.audio.isEffectsEnabled(), "N", layout.density);
+  }
+  if (layout.includePauseButton) {
+    drawPauseButton(context, pauseButtonRectangle(layout), layout.density);
+  }
   if (layout.includeEndGameButton) {
-    drawEndGameButton(context, endGameButtonRectangle(layout));
+    drawEndGameButton(context, endGameButtonRectangle(layout), layout.density);
   }
 }
 function hitTestScreenControls(point, layout) {
-  if (pointInsideRectangle(point, musicButtonRectangle(layout))) return "music";
-  if (pointInsideRectangle(point, effectsButtonRectangle(layout))) return "effects";
+  if (layout.includeAudioButtons !== false && pointInsideRectangle(point, musicButtonRectangle(layout))) return "music";
+  if (layout.includeAudioButtons !== false && pointInsideRectangle(point, effectsButtonRectangle(layout))) return "effects";
+  if (layout.includePauseButton && pointInsideRectangle(point, pauseButtonRectangle(layout))) return "pause";
   if (layout.includeEndGameButton && pointInsideRectangle(point, endGameButtonRectangle(layout))) return "endGame";
   return "none";
 }
 function musicButtonRectangle(layout) {
+  if (layout.density === "compact") return { x: layout.x, y: layout.y, width: compactButtonSize, height: compactButtonSize };
   return { x: layout.x, y: layout.y, width: audioButtonWidth, height: buttonHeight };
 }
 function effectsButtonRectangle(layout) {
+  if (layout.density === "compact") return { x: layout.x + compactButtonSize + gap, y: layout.y, width: compactButtonSize, height: compactButtonSize };
   return { x: layout.x + audioButtonWidth + gap, y: layout.y, width: audioButtonWidth, height: buttonHeight };
 }
-function endGameButtonRectangle(layout) {
-  return { x: layout.x + audioButtonWidth * 2 + gap * 2, y: layout.y, width: endButtonWidth, height: buttonHeight };
+function pauseButtonRectangle(layout) {
+  if (layout.density === "compact") return { x: layout.x, y: layout.y, width: compactPauseButtonSize, height: compactPauseButtonSize };
+  const audioOffset = layout.includeAudioButtons === false ? 0 : audioButtonWidth * 2 + gap * 2;
+  return { x: layout.x + audioOffset, y: layout.y, width: endButtonWidth, height: buttonHeight };
 }
-function drawToggleButton(context, rectangle, label, isEnabled, shortcut) {
+function endGameButtonRectangle(layout) {
+  if (layout.density === "compact") {
+    const pauseOffset2 = layout.includePauseButton ? compactButtonSize + gap : 0;
+    return { x: layout.x + pauseOffset2, y: layout.y, width: compactButtonSize, height: compactButtonSize };
+  }
+  const audioOffset = layout.includeAudioButtons === false ? 0 : audioButtonWidth * 2 + gap * 2;
+  const pauseOffset = layout.includePauseButton ? endButtonWidth + gap : 0;
+  return { x: layout.x + audioOffset + pauseOffset, y: layout.y, width: endButtonWidth, height: buttonHeight };
+}
+function drawToggleButton(context, rectangle, label, isEnabled, shortcut, density) {
   const fillStyle = isEnabled ? "rgba(22, 101, 52, 0.88)" : "rgba(69, 10, 10, 0.88)";
   const strokeStyle = isEnabled ? "#86efac" : "#fca5a5";
   const statusText = isEnabled ? "ON" : "OFF";
   context.save();
-  fillRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, 12, fillStyle);
-  strokeRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, 12, strokeStyle, 2);
+  fillRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, density === "compact" ? 14 : 12, fillStyle);
+  strokeRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, density === "compact" ? 14 : 12, strokeStyle, 2);
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.font = "800 14px Inter, system-ui, sans-serif";
+  context.font = density === "compact" ? "900 13px Inter, system-ui, sans-serif" : "800 14px Inter, system-ui, sans-serif";
   context.fillStyle = "#ffffff";
-  context.fillText(`${label}: ${statusText}`, rectangle.x + rectangle.width / 2, rectangle.y + 14);
-  context.font = "600 10px Inter, system-ui, sans-serif";
+  context.fillText(density === "compact" ? label === "Music" ? "M" : "S" : `${label}: ${statusText}`, rectangle.x + rectangle.width / 2, rectangle.y + (density === "compact" ? 17 : 14));
+  context.font = density === "compact" ? "800 9px Inter, system-ui, sans-serif" : "600 10px Inter, system-ui, sans-serif";
   context.fillStyle = "rgba(255, 255, 255, 0.78)";
-  context.fillText(`Tap / ${shortcut}`, rectangle.x + rectangle.width / 2, rectangle.y + 28);
+  context.fillText(density === "compact" ? statusText : `Tap / ${shortcut}`, rectangle.x + rectangle.width / 2, rectangle.y + (density === "compact" ? 31 : 28));
   context.restore();
 }
-function drawEndGameButton(context, rectangle) {
+function drawPauseButton(context, rectangle, density) {
+  if (density === "compact") {
+    drawCompactPauseButton(context, rectangle);
+    return;
+  }
   context.save();
-  fillRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, 12, "rgba(127, 29, 29, 0.9)");
-  strokeRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, 12, "#fecaca", 2);
+  fillRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, 12, "rgba(30, 64, 175, 0.9)");
+  strokeRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, 12, "#bfdbfe", 2);
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.font = "900 14px Inter, system-ui, sans-serif";
   context.fillStyle = "#ffffff";
-  context.fillText("END", rectangle.x + rectangle.width / 2, rectangle.y + 14);
+  context.font = "900 14px Inter, system-ui, sans-serif";
+  context.fillText("II", rectangle.x + rectangle.width / 2, rectangle.y + 14);
   context.font = "600 10px Inter, system-ui, sans-serif";
   context.fillStyle = "rgba(255, 255, 255, 0.78)";
-  context.fillText("Tap / Esc", rectangle.x + rectangle.width / 2, rectangle.y + 28);
+  context.fillText("Tap / P", rectangle.x + rectangle.width / 2, rectangle.y + 28);
+  context.restore();
+}
+function drawCompactPauseButton(context, rectangle) {
+  const radius = 24;
+  const gradient = context.createLinearGradient(rectangle.x, rectangle.y, rectangle.x, rectangle.y + rectangle.height);
+  gradient.addColorStop(0, "rgba(37, 99, 235, 0.9)");
+  gradient.addColorStop(1, "rgba(29, 78, 216, 0.82)");
+  context.save();
+  context.shadowColor = "rgba(0, 0, 0, 0.38)";
+  context.shadowBlur = 18;
+  context.shadowOffsetY = 9;
+  drawRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, radius);
+  context.fillStyle = gradient;
+  context.fill();
+  context.shadowBlur = 0;
+  strokeRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, radius, "rgba(255, 255, 255, 0.92)", 5);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = "#ffffff";
+  context.font = "900 19px Inter, system-ui, sans-serif";
+  context.fillText("PAUSE", rectangle.x + rectangle.width / 2, rectangle.y + rectangle.height / 2 + 1);
+  context.restore();
+}
+function drawEndGameButton(context, rectangle, density) {
+  context.save();
+  fillRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, density === "compact" ? 14 : 12, "rgba(127, 29, 29, 0.9)");
+  strokeRoundedRectangle(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, density === "compact" ? 14 : 12, "#fecaca", 2);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.font = density === "compact" ? "900 16px Inter, system-ui, sans-serif" : "900 14px Inter, system-ui, sans-serif";
+  context.fillStyle = "#ffffff";
+  context.fillText(density === "compact" ? "X" : "END", rectangle.x + rectangle.width / 2, rectangle.y + (density === "compact" ? 18 : 14));
+  context.font = density === "compact" ? "800 9px Inter, system-ui, sans-serif" : "600 10px Inter, system-ui, sans-serif";
+  context.fillStyle = "rgba(255, 255, 255, 0.78)";
+  context.fillText(density === "compact" ? "Esc" : "Tap / Esc", rectangle.x + rectangle.width / 2, rectangle.y + (density === "compact" ? 32 : 28));
   context.restore();
 }
 function pointInsideRectangle(point, rectangle) {
@@ -1905,14 +2086,9 @@ var SpeedLimitSystem = class {
     };
   }
   changeSpeedRule(playerDistanceMeters) {
-    const speedShift = this.random.integer(-2, 3) * 5;
-    const baseMinimum = clamp(this.level.startingMinimumSpeedKmh + speedShift + this.random.integer(-1, 2) * 5, 20, 75);
-    const range = this.random.pick([50, 55, 60, 65, 70]);
-    const maxByLevel = clamp(122 + this.level.levelNumber * 5, 120, 155);
-    this.minimumSpeedKmh = roundToNearest(baseMinimum, 5);
-    this.maximumSpeedKmh = roundToNearest(clamp(this.minimumSpeedKmh + range, 95, maxByLevel), 5);
-    if (this.maximumSpeedKmh <= this.minimumSpeedKmh + 35) this.maximumSpeedKmh = this.minimumSpeedKmh + 40;
-    this.recentlyChangedSecondsRemaining = 5.5;
+    this.minimumSpeedKmh = GameConfig.rules.minimumSpeedLimitKmh;
+    this.maximumSpeedKmh = GameConfig.rules.maximumSpeedLimitKmh;
+    this.recentlyChangedSecondsRemaining = 0;
     this.nextChangeDistanceMeters = playerDistanceMeters + this.level.speedRuleChangeDistanceMeters + this.random.range(-90, 180);
   }
 };
@@ -2217,6 +2393,7 @@ var PlayScene = class {
   speedLimitStatus;
   lastCargoPopupText = "";
   cargoPopupSeconds = 0;
+  isPaused = false;
   constructor(options) {
     this.level = createLevelDefinition(options.levelNumber);
     this.previousScore = options.score;
@@ -2230,7 +2407,8 @@ var PlayScene = class {
     void engine2.audio.startBackgroundMusic();
   }
   update(deltaSeconds, engine2) {
-    if (this.handleExitOrSettings(engine2)) return;
+    if (this.handlePlayCommands(engine2)) return;
+    if (this.isPaused) return;
     this.elapsedSeconds += deltaSeconds;
     this.cargoPopupSeconds = Math.max(0, this.cargoPopupSeconds - deltaSeconds);
     this.passingPulseSeconds = Math.max(0, this.passingPulseSeconds - deltaSeconds);
@@ -2272,15 +2450,45 @@ var PlayScene = class {
     this.vehicleRenderer.drawPlayer(context, this.player, this.player.speedKmh, this.passingPulseSeconds);
     this.drawDrivingEffects(context);
     this.drawHeadsUpDisplay(context, engine2);
+    if (this.isPaused) this.drawPauseOverlay(context);
   }
-  handleExitOrSettings(engine2) {
-    const controlAction = handleScreenControlInput(engine2, this.getPlayScreenControlsLayout());
-    if (controlAction === "endGame" || engine2.input.consumePressed("Escape")) {
-      engine2.audio.stopBackgroundMusic();
-      engine2.setScene(new StartScene({ levelNumber: this.level.levelNumber, score: this.previousScore }));
+  handlePlayCommands(engine2) {
+    const controlAction = handleScreenControlInput(engine2, this.getPlayScreenControlsLayout(engine2.isCompactViewport()));
+    if (this.isPaused) {
+      if (controlAction === "endGame" || engine2.input.consumePressed("Escape")) {
+        this.exitToStart(engine2);
+        return true;
+      }
+      if (controlAction === "pause" || engine2.input.consumePressed("p", "P", "Enter", " ")) {
+        this.isPaused = false;
+        return true;
+      }
+      const click = engine2.input.consumePointerClickPoint();
+      if (!click) return controlAction !== "none";
+      const point = engine2.clientPointToCanvasPoint(click.clientX, click.clientY);
+      if (this.pointInsideRectangle(point, this.resumeButtonRectangle())) {
+        this.isPaused = false;
+        return true;
+      }
+      if (this.pointInsideRectangle(point, this.exitButtonRectangle())) {
+        this.exitToStart(engine2);
+        return true;
+      }
+      return true;
+    }
+    if (controlAction === "pause" || engine2.input.consumePressed("p", "P", "Escape")) {
+      this.isPaused = true;
+      return true;
+    }
+    if (controlAction === "endGame") {
+      this.exitToStart(engine2);
       return true;
     }
     return controlAction !== "none";
+  }
+  exitToStart(engine2) {
+    engine2.audio.stopBackgroundMusic();
+    engine2.setScene(new StartScene({ levelNumber: this.level.levelNumber, score: this.previousScore }));
   }
   applySpeedLimitPenalty(deltaSeconds) {
     if (!this.speedLimitStatus.isViolation || !this.speedLimitStatus.penaltyIsActive) {
@@ -2404,6 +2612,10 @@ var PlayScene = class {
     context.restore();
   }
   drawHeadsUpDisplay(context, engine2) {
+    if (engine2.isCompactViewport()) {
+      this.drawCompactHeadsUpDisplay(context, engine2);
+      return;
+    }
     const score = this.currentScore();
     const progress = Math.min(1, this.player.distanceMeters / this.level.distanceMeters);
     const screenControlsLayout = this.getPlayScreenControlsLayout();
@@ -2426,7 +2638,7 @@ var PlayScene = class {
     this.drawSpeedPanel(context);
     this.drawSpeedLimitRoadSign(context);
     drawScreenControls(context, engine2, screenControlsLayout);
-    this.drawSpeedViolationWarning(context);
+    this.drawSpeedViolationWarning(context, false);
     if (this.cargoPopupSeconds > 0) {
       context.font = "900 30px Inter, system-ui, sans-serif";
       context.textAlign = "center";
@@ -2434,13 +2646,45 @@ var PlayScene = class {
     }
     context.restore();
   }
-  getPlayScreenControlsLayout() {
+  drawCompactHeadsUpDisplay(context, engine2) {
+    const score = this.currentScore();
+    const progress = Math.min(1, this.player.distanceMeters / this.level.distanceMeters);
+    context.save();
+    fillRoundedRectangle(context, 14, 14, 292, 112, 14, "rgba(15, 23, 42, 0.78)");
+    strokeRoundedRectangle(context, 14, 14, 292, 112, 14, "rgba(255, 255, 255, 0.18)", 2);
+    context.textAlign = "left";
+    context.textBaseline = "middle";
+    context.font = "900 18px Inter, system-ui, sans-serif";
+    context.fillStyle = "#fef08a";
+    context.fillText(`Level ${this.level.levelNumber}`, 30, 36);
+    context.font = "700 15px Inter, system-ui, sans-serif";
+    context.fillStyle = "#ffffff";
+    context.fillText(`Score ${score}`, 30, 62);
+    context.fillText(`Time ${formatTime(this.elapsedSeconds)}`, 30, 86);
+    context.fillStyle = "#bbf7d0";
+    context.fillText(`Passes ${this.passedVehicleCount}`, 168, 86);
+    fillRoundedRectangle(context, 30, 106, 244, 10, 5, "rgba(255,255,255,0.16)");
+    fillRoundedRectangle(context, 30, 106, 244 * progress, 10, 5, "#22c55e");
+    this.drawCompactSpeedPanel(context);
+    drawScreenControls(context, engine2, this.getPlayScreenControlsLayout(true));
+    this.drawSpeedViolationWarning(context, true);
+    if (this.cargoPopupSeconds > 0) {
+      context.font = "900 24px Inter, system-ui, sans-serif";
+      context.textAlign = "center";
+      drawOutlinedText(context, this.lastCargoPopupText, this.player.x, this.player.getScreenY() - 76, "#fde68a", "rgba(0,0,0,0.7)", 6);
+    }
+    context.restore();
+  }
+  getPlayScreenControlsLayout(forceCompact = false) {
+    if (forceCompact) {
+      return { x: 1172, y: 112, includePauseButton: true, includeEndGameButton: false, includeAudioButtons: false, density: "compact" };
+    }
     const topHudRightEdge = 18 + 376;
     const speedPanelLeftEdge = 990;
-    const buttonRowWidth = 136 + 10 + 136 + 10 + 108;
+    const buttonRowWidth = 136 + 10 + 136 + 10 + 108 + 10 + 108;
     const availableWidth = speedPanelLeftEdge - topHudRightEdge;
     const x = topHudRightEdge + Math.round((availableWidth - buttonRowWidth) / 2);
-    return { x, y: 18, includeEndGameButton: true };
+    return { x, y: 18, includePauseButton: true, includeEndGameButton: true, includeAudioButtons: true };
   }
   drawSpeedPanel(context) {
     const isViolation = this.speedLimitStatus.isViolation;
@@ -2462,29 +2706,74 @@ var PlayScene = class {
       context.fillText(warningText, 1121, 140);
     }
   }
-  drawSpeedViolationWarning(context) {
+  drawCompactSpeedPanel(context) {
+    const isViolation = this.speedLimitStatus.isViolation;
+    const x = 1014;
+    const y = 14;
+    fillRoundedRectangle(context, x, y, 250, 92, 14, "rgba(15, 23, 42, 0.78)");
+    strokeRoundedRectangle(context, x, y, 250, 92, 14, isViolation ? "#f87171" : "rgba(255, 255, 255, 0.18)", 2);
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.font = "900 38px Inter, system-ui, sans-serif";
+    drawOutlinedText(context, `${Math.round(this.player.speedKmh)}`, x + 88, y + 40, isViolation ? "#fca5a5" : "#93c5fd", "rgba(0,0,0,0.65)", 5);
+    context.font = "800 14px Inter, system-ui, sans-serif";
+    context.fillStyle = "#ffffff";
+    context.fillText("km/h", x + 160, y + 40);
+    context.font = "800 16px Inter, system-ui, sans-serif";
+    context.fillText(`${this.speedLimitStatus.minimumSpeedKmh}-${this.speedLimitStatus.maximumSpeedKmh}`, x + 124, y + 70);
+  }
+  drawSpeedViolationWarning(context, isCompact) {
     if (!this.speedLimitStatus.isViolation) return;
     const isPenaltyActive = this.speedLimitStatus.penaltyIsActive;
     const blink = Math.sin(this.elapsedSeconds * 10) > 0;
-    const width = 490;
-    const height = 72;
+    const width = isCompact ? 424 : 490;
+    const height = isCompact ? 58 : 72;
     const topHudRightEdge = 18 + 376;
     const speedPanelLeftEdge = 990;
     const availableWidth = speedPanelLeftEdge - topHudRightEdge;
-    const x = topHudRightEdge + Math.round((availableWidth - width) / 2);
-    const y = 62;
+    const x = isCompact ? Math.round((GameConfig.canvas.width - width) / 2) : topHudRightEdge + Math.round((availableWidth - width) / 2);
+    const y = isCompact ? 134 : 62;
     context.save();
     fillRoundedRectangle(context, x, y, width, height, 18, isPenaltyActive ? "rgba(127, 29, 29, 0.94)" : "rgba(120, 53, 15, 0.94)");
     strokeRoundedRectangle(context, x, y, width, height, 18, blink ? "#fef08a" : "#fecaca", 4);
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.font = "900 23px Inter, system-ui, sans-serif";
-    drawOutlinedText(context, "\u26A0 SPEED LIMIT WARNING", x + width / 2, y + 24, "#ffffff", "rgba(0,0,0,0.65)", 5);
-    context.font = "800 17px Inter, system-ui, sans-serif";
+    context.font = isCompact ? "900 18px Inter, system-ui, sans-serif" : "900 23px Inter, system-ui, sans-serif";
+    drawOutlinedText(context, "SPEED LIMIT WARNING", x + width / 2, y + (isCompact ? 20 : 24), "#ffffff", "rgba(0,0,0,0.65)", 5);
+    context.font = isCompact ? "800 14px Inter, system-ui, sans-serif" : "800 17px Inter, system-ui, sans-serif";
     const detail = isPenaltyActive ? `Penalty active: losing ${GameConfig.rules.speedPenaltyPointsPerSecond} point every second` : `Adjust speed within ${this.speedLimitStatus.secondsUntilPenalty.toFixed(1)} seconds to avoid penalty`;
     context.fillStyle = isPenaltyActive ? "#fecaca" : "#fef3c7";
-    context.fillText(detail, x + width / 2, y + 51);
+    context.fillText(detail, x + width / 2, y + (isCompact ? 42 : 51));
     context.restore();
+  }
+  drawPauseOverlay(context) {
+    context.save();
+    context.fillStyle = "rgba(2, 6, 23, 0.58)";
+    context.fillRect(0, 0, GameConfig.canvas.width, GameConfig.canvas.height);
+    fillRoundedRectangle(context, 390, 214, 500, 288, 18, "rgba(15, 23, 42, 0.94)");
+    strokeRoundedRectangle(context, 390, 214, 500, 288, 18, "rgba(255, 255, 255, 0.28)", 2);
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.font = "900 42px Inter, system-ui, sans-serif";
+    drawOutlinedText(context, "PAUSED", 640, 274, "#bfdbfe", "rgba(0,0,0,0.65)", 5);
+    context.font = "700 18px Inter, system-ui, sans-serif";
+    context.fillStyle = "#e5e7eb";
+    context.fillText("Resume the drive or exit to the start screen.", 640, 320);
+    drawButton(context, "RESUME", 448, 368, 180, 58);
+    drawButton(context, "EXIT", 652, 368, 180, 58);
+    context.font = "700 15px Inter, system-ui, sans-serif";
+    context.fillStyle = "rgba(255,255,255,0.72)";
+    context.fillText("P / Enter resumes. Esc exits from pause.", 640, 464);
+    context.restore();
+  }
+  resumeButtonRectangle() {
+    return { x: 448, y: 368, width: 180, height: 58 };
+  }
+  exitButtonRectangle() {
+    return { x: 652, y: 368, width: 180, height: 58 };
+  }
+  pointInsideRectangle(point, rectangle) {
+    return point.x >= rectangle.x && point.x <= rectangle.x + rectangle.width && point.y >= rectangle.y && point.y <= rectangle.y + rectangle.height;
   }
   drawSpeedLimitRoadSign(context) {
     const shouldHighlight = this.speedLimitStatus.recentlyChangedSecondsRemaining > 0;
@@ -2558,10 +2847,21 @@ var StartScene = class {
   constructor(options = { levelNumber: 1, score: 0 }) {
     this.options = options;
   }
+  enter(engine2) {
+    void engine2.assets.preloadAll().catch(() => void 0);
+  }
   update(_deltaSeconds, engine2) {
-    if (handleScreenControlInput(engine2, { x: 704, y: 512 }) !== "none") return;
+    if (handleScreenControlInput(engine2, this.getScreenControlsLayout(engine2)) !== "none") return;
+    if (!engine2.assets.isReady()) {
+      if (engine2.assets.getState() === "failed" && (engine2.input.consumePressed("Enter", " ") || engine2.input.consumePointerClick())) {
+        void engine2.assets.retry().catch(() => void 0);
+      }
+      return;
+    }
     if (engine2.input.consumePressed("Enter", " ") || engine2.input.consumePointerClick()) {
-      void engine2.audio.startBackgroundMusic();
+      engine2.requestLandscapeMode();
+      engine2.audio.prepareForPlayback();
+      engine2.audio.startFromUserGesture();
       engine2.setScene(new PlayScene(this.options));
     }
   }
@@ -2578,10 +2878,10 @@ var StartScene = class {
     drawOutlinedText(context, `Level ${level.levelNumber}: ${level.fromCity} \u2192 ${level.toCity}`, 640, 168, "#bbf7d0");
     context.font = "600 20px Inter, system-ui, sans-serif";
     context.fillStyle = "#e5e7eb";
-    context.fillText("Drive between cities, avoid traffic, pits, and accidents.", 640, 224);
-    context.fillText("Pass slower vehicles safely for bonus points.", 640, 256);
-    context.fillText("Collect cargo and respect changing speed signs.", 640, 288);
-    context.fillText("After 5 seconds over/under the limit, you lose 1 point per second.", 640, 320);
+    context.fillText("Drive between cities, avoid traffic, pits, and accidents.", 640, 218);
+    context.fillText("Pass slower vehicles safely for bonus points.", 640, 250);
+    context.fillText("Collect cargo and keep speed between 80 and 300 km/h.", 640, 282);
+    context.fillText("After 5 seconds outside the range, you lose 1 point per second.", 640, 314);
     context.textAlign = "left";
     context.font = "700 20px Inter, system-ui, sans-serif";
     context.fillStyle = "#fef08a";
@@ -2593,17 +2893,46 @@ var StartScene = class {
     context.fillText("\u2190 / A  Steer left", 402, 462);
     context.fillText("\u2192 / D  Steer right", 402, 494);
     context.fillText("Touch: on-screen GO, BRAKE, \u2190, \u2192", 402, 526);
-    context.fillText("Esc during play ends the current drive", 402, 548);
+    context.fillText("P pauses. Esc opens pause, then exits from pause.", 402, 548);
     context.textAlign = "left";
     context.fillStyle = "#93c5fd";
     context.font = "600 18px Inter, system-ui, sans-serif";
     context.fillText(`Current score: ${this.options.score}`, 700, 398);
     context.fillText(`Route distance: ${(level.distanceMeters / 1e3).toFixed(1)} km`, 700, 430);
-    context.fillText(`Starting speed range: ${level.startingMinimumSpeedKmh}-${level.startingMaximumSpeedKmh} km/h`, 700, 462);
+    context.fillText(`Speed range: ${level.startingMinimumSpeedKmh}-${level.startingMaximumSpeedKmh} km/h`, 700, 462);
     context.fillText("AI traffic steers around slower vehicles", 700, 494);
-    drawScreenControls(context, engine2, { x: 704, y: 512 });
-    drawButton(context, "PRESS ENTER OR TAP TO START", 405, 574, 470, 58);
+    drawScreenControls(context, engine2, this.getScreenControlsLayout(engine2));
+    this.drawAssetReadiness(context, engine2);
     context.restore();
+  }
+  getScreenControlsLayout(engine2) {
+    if (engine2.isCompactViewport()) return { x: 982, y: 518, density: "compact" };
+    return { x: 704, y: 512 };
+  }
+  drawAssetReadiness(context, engine2) {
+    const state = engine2.assets.getState();
+    const loaded = engine2.assets.getLoadedCount();
+    const total = engine2.assets.getTotalCount();
+    if (state === "ready") {
+      drawButton(context, "PRESS ENTER OR TAP TO START", 405, 574, 470, 58);
+      return;
+    }
+    if (state === "failed") {
+      context.font = "800 18px Inter, system-ui, sans-serif";
+      context.textAlign = "center";
+      context.fillStyle = "#fecaca";
+      context.fillText(engine2.assets.getFailedMessage(), 640, 585);
+      drawButton(context, "RETRY ASSET DOWNLOAD", 430, 606, 420, 50);
+      return;
+    }
+    context.textAlign = "center";
+    context.font = "900 22px Inter, system-ui, sans-serif";
+    context.fillStyle = "#bfdbfe";
+    context.fillText(`LOADING ASSETS ${loaded}/${total}`, 640, 588);
+    context.fillStyle = "rgba(255,255,255,0.16)";
+    context.fillRect(430, 610, 420, 14);
+    context.fillStyle = "#38bdf8";
+    context.fillRect(430, 610, total > 0 ? 420 * (loaded / total) : 0, 14);
   }
 };
 

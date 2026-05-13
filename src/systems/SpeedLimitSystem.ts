@@ -1,7 +1,6 @@
 import type { LevelDefinition } from '../config/LevelFactory.js';
 import { GameConfig } from '../config/GameConfig.js';
 import { RandomNumberGenerator } from '../utils/Random.js';
-import { clamp, roundToNearest } from '../utils/MathUtils.js';
 
 export interface SpeedLimitStatus {
   readonly minimumSpeedKmh: number;
@@ -61,16 +60,10 @@ export class SpeedLimitSystem {
   }
 
   private changeSpeedRule(playerDistanceMeters: number): void {
-    const speedShift = this.random.integer(-2, 3) * 5;
-    const baseMinimum = clamp(this.level.startingMinimumSpeedKmh + speedShift + this.random.integer(-1, 2) * 5, 20, 75);
-    const range = this.random.pick([50, 55, 60, 65, 70]);
-    const maxByLevel = clamp(122 + this.level.levelNumber * 5, 120, 155);
+    this.minimumSpeedKmh = GameConfig.rules.minimumSpeedLimitKmh;
+    this.maximumSpeedKmh = GameConfig.rules.maximumSpeedLimitKmh;
 
-    this.minimumSpeedKmh = roundToNearest(baseMinimum, 5);
-    this.maximumSpeedKmh = roundToNearest(clamp(this.minimumSpeedKmh + range, 95, maxByLevel), 5);
-    if (this.maximumSpeedKmh <= this.minimumSpeedKmh + 35) this.maximumSpeedKmh = this.minimumSpeedKmh + 40;
-
-    this.recentlyChangedSecondsRemaining = 5.5;
+    this.recentlyChangedSecondsRemaining = 0;
     this.nextChangeDistanceMeters = playerDistanceMeters + this.level.speedRuleChangeDistanceMeters + this.random.range(-90, 180);
   }
 }

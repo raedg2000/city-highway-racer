@@ -1,6 +1,6 @@
 {
   "name": "city-highway-racer",
-  "version": "1.1.2",
+  "version": "1.1.4",
   "description": "A cartoon bird-view highway driving game built with TypeScript and HTML5 Canvas.",
   "type": "module",
   "scripts": {
